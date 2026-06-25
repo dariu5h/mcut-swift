@@ -9,7 +9,10 @@ let package = Package(
     name: "MCUT",
     platforms: [.iOS(.v18), .macOS(.v15)],
     products: [
-        .library(name: "MCUT", targets: ["MCUT"])
+        .library(name: "MCUT", targets: ["MCUT"]),
+        // Opt-in Apple-graphics interop (Model I/O + RealityKit). Kept out of MCUT so the core
+        // stays dependency-light; import it only when you need MDLMesh/MeshResource conversions.
+        .library(name: "MCUTInterop", targets: ["MCUTInterop"])
     ],
     targets: [
         .binaryTarget(
@@ -18,6 +21,7 @@ let package = Package(
             checksum: "7d0a763b32b8629fc7cc04fd1b50c08f53a1050da4de71c094bcfd4a35c821f1"
         ),
         .target(name: "MCUT", dependencies: ["Cmcut"]),
+        .target(name: "MCUTInterop", dependencies: ["MCUT"]),
         .testTarget(name: "MCUTTests", dependencies: ["MCUT"])
     ]
 )

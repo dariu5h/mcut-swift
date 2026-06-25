@@ -271,4 +271,97 @@ final class MCUTTests: XCTestCase {
         for p in above.positions { XCTAssertGreaterThanOrEqual(p.y, -0.001) }
         for p in below.positions { XCTAssertLessThanOrEqual(p.y, 0.001) }
     }
+
+    // MARK: - Vertex welding
+
+    /// Duplicate every face's vertices so no two faces share an index — mimics the attribute-split
+    /// "polygon soup" that Model I/O / RealityKit meshes arrive as.
+    private static func exploded(_ mesh: MCUTMesh) -> MCUTMesh {
+        var positions = [SIMD3<Float>]()
+        var faceIndices = [UInt32]()
+        var cursor = 0
+        for size in mesh.faceSizes {
+            let n = Int(size)
+            for k in 0..<n {
+                faceIndices.append(UInt32(positions.count))
+                positions.append(mesh.positions[Int(mesh.faceIndices[cursor + k])])
+            }
+            cursor += n
+        }
+        return MCUTMesh(positions: positions, faceIndices: faceIndices, faceSizes: mesh.faceSizes)
+    }
+
+    func testWeldReconnectsExplodedMesh() throws {
+        let soup = Self.exploded(Self.cube())
+        XCTAssertFalse(Self.isWatertight(soup), "an exploded soup shares no edges")
+        XCTAssertEqual(soup.positions.count, Int(soup.faceSizes.reduce(0, +)),
+                       "every face corner is its own vertex")
+
+        let welded = soup.welded()
+        XCTAssertTrue(Self.isWatertight(welded), "welding restores shared edges")
+        XCTAssertEqual(welded.positions.count, Self.cube().positions.count,
+                       "merges back to the 8 cube corners")
+        XCTAssertEqual(Self.signedVolume(welded), Self.signedVolume(Self.cube()), accuracy: 1e-4,
+                       "welding preserves geometry")
+    }
+
+    /// The payoff: an unwelded soup can't be booleaned, but welding makes the same inputs work.
+    func testWeldEnablesBooleanOnExplodedInputs() throws {
+        let a = Self.exploded(Self.cube()).welded()
+        let b = Self.exploded(Self.cubeB()).welded()
+        let union = try MCUTContext().union(a, b)
+        XCTAssertTrue(Self.isWatertight(union), "boolean of welded soups is watertight")
+        XCTAssertEqual(Self.signedVolume(union), 8 + 8 - (1 * 1.3 * 1.7), accuracy: 0.05)
+    }
+
+    // MARK: - mcut triangulation (FACE_TRIANGULATION)
+
+    /// Signed volume computed from `triangleIndices` (mcut's CDT) rather than the faces. If the
+    /// triangulation correctly tiles the same solid, this matches the face-based volume.
+    private static func signedVolumeFromTriangles(_ mesh: MCUTMesh) -> Float {
+        let tris = mesh.triangleIndices!
+        var vol: Float = 0
+        for i in stride(from: 0, to: tris.count, by: 3) {
+            let p0 = mesh.positions[Int(tris[i])]
+            let p1 = mesh.positions[Int(tris[i + 1])]
+            let p2 = mesh.positions[Int(tris[i + 2])]
+            vol += simd_dot(p0, simd_cross(p1, p2))
+        }
+        return vol / 6
+    }
+
+    func testBooleanResultCarriesTriangulation() throws {
+        let union = try MCUTContext().union(Self.cube(), Self.cubeB())
+        let tris = try XCTUnwrap(union.triangleIndices, "boolean result carries mcut's CDT")
+        XCTAssertEqual(tris.count % 3, 0, "triangulation is a flat 3·N index list")
+        XCTAssertTrue(tris.allSatisfy { $0 < UInt32(union.positions.count) }, "indices are in range")
+        // The triangulation must tile the very same solid as the n-gon faces.
+        XCTAssertEqual(Self.signedVolumeFromTriangles(union), Self.signedVolume(union), accuracy: 1e-3,
+                       "CDT tiles the same volume as the faces")
+    }
+
+    func testSliceHalvesCarryTriangulation() throws {
+        let (above, below) = try MCUTContext().slice(Self.cube(), byPlane: [0, 1, 0], offset: 0)
+        XCTAssertEqual(Self.signedVolumeFromTriangles(above), 4, accuracy: 0.05)
+        XCTAssertEqual(Self.signedVolumeFromTriangles(below), 4, accuracy: 0.05)
+    }
+
+    func testWeldClearsTriangulation() {
+        // A triangle-soup mesh's triangulation is its own indices; welding renumbers vertices, so it
+        // must be dropped rather than left dangling.
+        XCTAssertNotNil(Self.cube().triangleIndices, "triangles: init seeds the triangulation")
+        XCTAssertNil(Self.cube().welded().triangleIndices, "welding clears the stale triangulation")
+    }
+
+    func testWeldDropsDegenerateFaces() throws {
+        // A triangle with two coincident corners collapses to an edge and is dropped; the second
+        // triangle is non-degenerate and survives.
+        let mesh = MCUTMesh(
+            triangles: [[0, 0, 0], [1, 0, 0], [0, 0, 0],
+                        [0, 0, 0], [1, 0, 0], [0, 1, 0]].map { SIMD3<Float>($0[0], $0[1], $0[2]) },
+            indices: [0, 1, 2, 3, 4, 5])
+        let welded = mesh.welded()
+        XCTAssertEqual(welded.faceSizes.count, 1, "the degenerate triangle is removed")
+        XCTAssertEqual(welded.faceSizes.first, 3, "the surviving face is still a triangle")
+    }
 }

@@ -10,19 +10,30 @@ public struct MCUTMesh: Sendable {
     public var faceIndices: [UInt32]         // flat, concatenated per face
     public var faceSizes:   [UInt32]         // vertex count of each face; sum == faceIndices.count
 
-    public init(positions: [SIMD3<Float>], faceIndices: [UInt32], faceSizes: [UInt32]) {
+    /// Optional precomputed triangle decomposition of the faces (flat `3·N` indices into
+    /// `positions`), as mcut's constrained-Delaunay triangulation. Non-nil on the meshes returned by
+    /// `cut`/`union`/`intersect`/`subtract`/`slice`; `nil` on meshes the caller built directly (other
+    /// than the `triangles:` convenience, where the input *is* the triangulation). Correct for
+    /// non-convex faces, unlike a naive fan — converters to triangle-only formats use it when present.
+    /// Indices are invalidated by anything that renumbers vertices (e.g. `welded()` clears it).
+    public var triangleIndices: [UInt32]?
+
+    public init(positions: [SIMD3<Float>], faceIndices: [UInt32], faceSizes: [UInt32],
+                triangleIndices: [UInt32]? = nil) {
         self.positions = positions
         self.faceIndices = faceIndices
         self.faceSizes = faceSizes
+        self.triangleIndices = triangleIndices
     }
 
     /// Triangle-soup convenience: `faceSizes` becomes `[3, 3, …]`.
-    /// `indices.count` must be a multiple of 3.
+    /// `indices.count` must be a multiple of 3. The indices are also the triangulation.
     public init(triangles positions: [SIMD3<Float>], indices: [UInt32]) {
         precondition(indices.count % 3 == 0, "triangle index count must be a multiple of 3")
         self.positions = positions
         self.faceIndices = indices
         self.faceSizes = [UInt32](repeating: 3, count: indices.count / 3)
+        self.triangleIndices = indices
     }
 }
 

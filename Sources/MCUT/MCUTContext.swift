@@ -94,9 +94,12 @@ public final class MCUTContext {
     // MARK: - Per-component assembly
 
     private func makeFragment(_ comp: McConnectedComponent, options: CutOptions) throws -> Fragment {
-        Fragment(
-            mesh: try readMesh(comp),
-            triangulatedFaceIndices: try options.triangulate ? readTriangulation(comp) : nil,
+        let triangulation = try options.triangulate ? readTriangulation(comp) : nil
+        var mesh = try readMesh(comp)
+        mesh.triangleIndices = triangulation     // carry mcut's CDT on the mesh for converters
+        return Fragment(
+            mesh: mesh,
+            triangulatedFaceIndices: triangulation,
             location: MCUTContext.fragmentLocation(try readScalar(comp, MC_CONNECTED_COMPONENT_DATA_FRAGMENT_LOCATION)),
             sealType: MCUTContext.fragmentSealType(try readScalar(comp, MC_CONNECTED_COMPONENT_DATA_FRAGMENT_SEAL_TYPE)),
             vertexMap: try options.includeVertexMap ? readChannel(comp, MC_CONNECTED_COMPONENT_DATA_VERTEX_MAP) : nil,
@@ -259,14 +262,22 @@ public final class MCUTContext {
         var positions = [SIMD3<Float>]()
         var faceIndices = [UInt32]()
         var faceSizes = [UInt32]()
+        var triangleIndices = [UInt32]()
+        // Only carry a merged triangulation if every part has one; the same per-mesh vertex offset
+        // applies to triangulation indices as to face indices.
+        let hasTriangulation = !meshes.isEmpty && meshes.allSatisfy { $0.triangleIndices != nil }
         var offset: UInt32 = 0
         for m in meshes {
             positions.append(contentsOf: m.positions)
             faceIndices.append(contentsOf: m.faceIndices.map { $0 + offset })
             faceSizes.append(contentsOf: m.faceSizes)
+            if hasTriangulation {
+                triangleIndices.append(contentsOf: m.triangleIndices!.map { $0 + offset })
+            }
             offset += UInt32(m.positions.count)
         }
-        return MCUTMesh(positions: positions, faceIndices: faceIndices, faceSizes: faceSizes)
+        return MCUTMesh(positions: positions, faceIndices: faceIndices, faceSizes: faceSizes,
+                        triangleIndices: hasTriangulation ? triangleIndices : nil)
     }
 
     /// Map a non-success `McResult` to a thrown `MCUTError`.
@@ -326,6 +337,7 @@ extension MCUTContext {
 
         var options = CutOptions()
         options.seal = true
+        options.triangulate = true     // so the merged halves carry mcut's CDT for converters
         let result = try cut(mesh, with: quad, options: options)
 
         let above = MCUTContext.merge(result.fragments.filter { $0.location == .above }.map(\.mesh))
@@ -343,10 +355,12 @@ extension MCUTContext {
             UInt32(sealing.rawValue) | UInt32(location.rawValue))
         try dispatch(a, with: b, flags: flags)
 
-        let frags = try readComponents(of: MC_CONNECTED_COMPONENT_TYPE_FRAGMENT) { comp in
-            (mesh: try self.readMesh(comp),
-             sealed: MCUTContext.fragmentSealType(
-                try self.readScalar(comp, MC_CONNECTED_COMPONENT_DATA_FRAGMENT_SEAL_TYPE)) == .complete)
+        let frags = try readComponents(of: MC_CONNECTED_COMPONENT_TYPE_FRAGMENT) { comp -> (mesh: MCUTMesh, sealed: Bool) in
+            var mesh = try self.readMesh(comp)
+            mesh.triangleIndices = try self.readTriangulation(comp)   // mcut CDT, correct for n-gons
+            let sealed = MCUTContext.fragmentSealType(
+                try self.readScalar(comp, MC_CONNECTED_COMPONENT_DATA_FRAGMENT_SEAL_TYPE)) == .complete
+            return (mesh: mesh, sealed: sealed)
         }
         let sealed = frags.filter(\.sealed).map(\.mesh)
         return MCUTContext.merge(sealed.isEmpty ? frags.map(\.mesh) : sealed)
