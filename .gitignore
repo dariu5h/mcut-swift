@@ -38,8 +38,14 @@ out/
 *.xcframework.zip
 *.dylib
 
+# SampleApp derived data (only if the spike app is kept)
+SampleApp/build/
+
 # Claude
 .claude/*
 !.claude/settings.json
 !.claude/CLAUDE.md
 .claude/settings.local.json
+
+# macOS
+.DS_Store

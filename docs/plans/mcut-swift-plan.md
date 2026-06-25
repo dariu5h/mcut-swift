@@ -75,8 +75,8 @@ mcut-swift/                      ← the public repo (referenced by URL)
 ├── external/
 │   └── mcut/                    ← git submodule, pinned to an upstream tag (e.g. v1.3.0)
 ├── scripts/
-│   ├── build-xcframework.sh     ← builds all slices, wraps frameworks, lipo, create-xcframework
-│   └── ios.toolchain.cmake      ← leetal/ios-cmake toolchain (vendored or fetched)
+│   └── build-xcframework.sh     ← builds all slices (native CMake iOS), wraps frameworks, create-xcframework
+│                                   NOTE: ios.toolchain.cmake dropped — native CMake handles iOS (see §9b findings)
 ├── Examples/
 │   └── SampleApp/               ← tiny app proving import + a real cut, used to validate releases
 └── .github/
@@ -100,10 +100,15 @@ We build dynamic from day one (no static-first stage) so the package is publicly
 
 ### Per-slice pipeline
 
+> **Implemented (2026-06-25) with native CMake, not ios-cmake.** The commands below are kept for
+> reference, but [scripts/build-xcframework.sh](../../scripts/build-xcframework.sh) actually uses
+> `-DCMAKE_SYSTEM_NAME=iOS` + `-DCMAKE_OSX_SYSROOT` + `-DCMAKE_OSX_ARCHITECTURES`. The simulator
+> slice builds **fat in one invocation** (`arm64;x86_64`) — no separate builds + `lipo`. See §9b.
+
 Slices required for v1:
-- iOS device — `arm64` (ios-cmake `PLATFORM=OS64`)
-- iOS simulator — `arm64` + `x86_64` (`SIMULATORARM64` + `SIMULATOR64`), then `lipo`'d into one fat Mach-O
-- macOS — `arm64` + `x86_64` (`MAC_ARM64` + `MAC`)
+- iOS device — `arm64` (sysroot `iphoneos`)
+- iOS simulator — `arm64;x86_64` fat (sysroot `iphonesimulator`, one build)
+- macOS — `arm64` (sysroot `macosx`; x86_64 universal slice deferred — see §9b open items)
 
 For each slice:
 
@@ -305,9 +310,18 @@ mcut is **LGPL v3** ("weak copyleft"). Our obligations as a redistributor and th
   confirm)**; that floor applies to the *example only*, above the package's own minimum. Older-OS
   fallback if needed: `ARView` via `UIViewRepresentable` / `NSViewRepresentable`.
 
+- **Minimum deployment targets:** **iOS 18 / macOS 15** (locked 2026-06-25). Driven by the
+  maintainer's consuming project (Swift 6, iOS 18+); macOS 15 pairs with the iOS 18 wave and is the
+  floor SwiftUI `RealityView` needs. The dylib must be built with matching deployment targets
+  (`CMAKE_OSX_DEPLOYMENT_TARGET` / ios-cmake `DEPLOYMENT_TARGET`) or the binary's `LC_BUILD_VERSION`
+  won't match `Package.swift` and consumers below the floor can't load it. Lowering later = rebuild
+  the binary with a lower target; reversible.
+- **Swift tools version / language mode:** **6.0** (locked 2026-06-25). Build the wrapper in Swift 6
+  mode from day one so the public API is `Sendable`/strict-concurrency clean — cheaper than
+  retrofitting once the consuming project is already Swift 6.
+
 ### Still open
 
-- **Minimum deployment targets** (e.g. iOS 13 / macOS 11?) — must match the slice builds.
 - **Scalar precision** of positions — `Float` only, `Double` only, or both? (Bridges currently
   assume `SIMD3<Float>`.)
 - **Platforms for v1** — iOS + macOS only, or add Catalyst / visionOS / tvOS now?
@@ -339,39 +353,77 @@ just macOS; (2) a **hand-wrapped framework loads at runtime on a real signed dev
 `@rpath`, code signature) — `swift test` on the Mac will NOT catch this; (3) mcut's **manifold input
 requirement** vs. real-world meshes.
 
-- **Spike 0 — does it even build?** *(in progress)* Submodule (`v1.3.0`) + macOS `libmcut.dylib`
-  via native cmake, `MCUT_BUILD_AS_SHARED_LIB=ON`. *Pass:* dylib builds and
-  `nm -gU … | grep mcDispatch` prints the symbol.
-- **Spike 1 — wrap + package.** macOS slice only → `Cmcut.framework` → `Cmcut.xcframework` →
-  `swift package compute-checksum`. *Pass:* xcframework produced, checksum computed.
-- **Spike 2 — does it link?** Trivial `Package.swift` with local `binaryTarget(path:)`, an `MCUT`
-  target that does `import Cmcut`, and a test that only calls `mcCreateContext`/`mcReleaseContext`
-  (no mesh). *Pass:* `swift test` links and dynamically loads the framework.
-- **Spike 3 — does it load in a REAL app, device + simulator?** Add the package to a separate
-  throwaway iOS app, run the same no-op on hardware. **Make-or-break gate** for the whole dynamic
-  xcframework premise.
+- **Spike 0 — does it even build? ✅ DONE (2026-06-25).** Submodule pinned `v1.3.0`; macOS shared
+  `libmcut.dylib` built via cmake (`MCUT_BUILD_AS_SHARED_LIB=ON`). `nm -gU` shows 22 exported `mc*`
+  symbols incl. `mcDispatch`, `mcCreateContext`, `mcGetConnectedComponents`, `mcReleaseContext`.
+  `otool -L` confirms system-only deps (`libc++`, `libSystem`) — no `.linkedLibrary("c++")` needed.
+- **Spike 1 — wrap + package. ✅ DONE.** [scripts/build-xcframework.sh](../../scripts/build-xcframework.sh)
+  builds all three slices and wraps them → `Cmcut.xcframework` → checksum. Slices verified:
+  `macos-arm64`, `ios-arm64_x86_64-simulator` (fat: x86_64+arm64), `ios-arm64` (minos 18.0).
+- **Spike 2 — does it link? ✅ DONE.** `Package.swift` (local `binaryTarget(path:)`) + `MCUT` target
+  (`import Cmcut`) + `MCUTTests.testContextSmoke` calling `mcCreateContext`/`mcReleaseContext`.
+  `swift test` passes on the macOS host — the dynamic framework links, loads, and the C API is
+  callable from Swift.
+- **Spike 3 — does it load in a REAL app, simulator + device? ✅ DONE (make-or-break gate PASSED).**
+  - **Simulator half ✅.** `xcodebuild test -scheme MCUT -destination 'platform=iOS Simulator,…'`
+    on an iOS 18.5 sim (iPhone 16 Pro) ran `testContextSmoke` → **TEST SUCCEEDED**. Xcode selected the
+    `ios-arm64_x86_64-simulator` slice, the dynamic `Cmcut.framework` loaded at runtime, and
+    `mcCreateContext` returned `MC_NO_ERROR`. Proves load + C-callable on the iOS runtime, not just host.
+  - **Device half ✅.** Real iPhone 14 Pro (iOS, arm64), `SampleApp/` SwiftUI app depending on the
+    local package, signed + installed + launched via `devicectl`. Console: `SPIKE3_DEVICE
+    mcCreateContext=0` — framework loaded on hardware, no dyld error, C call succeeded. The embedded
+    `Cmcut.framework` is auto re-signed with the dev team. **This is where the rpath landmine surfaced**
+    (see findings) — the simulator never caught it because it had a stale build-dir search path.
 - **Spike 4 — does it actually cut?** First real `mcDispatch`: hardcoded cube ∩ plane, read back
   fragments via the two-pass idiom. *Pass:* expected fragment count/geometry.
 
 Only after Spike 4 is green do `MCUTMesh`, `MCUTError`, the operation methods, the ModelIO/RealityKit
 bridges, and the RealityView example earn their keep (that work is Phase 5). Spikes 0–3 ≈ Phases 1–2.
 
+### Findings so far (build machinery)
+
+- **Toolchain: native CMake iOS support, NOT leetal/ios-cmake.** `-DCMAKE_SYSTEM_NAME=iOS`
+  `-DCMAKE_OSX_SYSROOT=iphoneos|iphonesimulator` `-DCMAKE_OSX_ARCHITECTURES=…` builds correct iOS
+  slices. The simulator slice builds **fat (`arm64;x86_64`) in one cmake invocation** — no separate
+  builds + `lipo` needed. This supersedes the §3/§4 plan of vendoring `scripts/ios.toolchain.cmake`.
+- **Header quirk (handled without touching upstream):** `mcut.h` `#include`s sibling `platform.h`
+  (bundle both into the framework `Headers/`), and uses `bool` with **no `<stdbool.h>`** (it's only
+  ever compiled as C++ upstream). Fixed by generating our own umbrella header `Cmcut.h`
+  (`#include <stdbool.h>` then `#include "mcut.h"`) and pointing the module map at `Cmcut.h`.
+- **Swift import detail:** `McResult.rawValue` is `Int` (not `UInt32`); `McContext` imports as an
+  optional opaque pointer; `mcCreateContext(&ctx, McFlags(0))`.
+- **Deployment-target match matters:** native macOS build with no target baked in the host SDK
+  (macOS 26) → linker warning vs `Package.swift`. Fixed by passing explicit
+  `CMAKE_OSX_DEPLOYMENT_TARGET` (macOS 15 / iOS 18).
+- **rpath landmine (the real Spike-3 catch): a consuming app must have `@executable_path/Frameworks`
+  in `LD_RUNPATH_SEARCH_PATHS`.** A dynamic binary `xcframework` is *embedded* into the app under
+  `App.app/Frameworks/`, but its install id is `@rpath/Cmcut.framework/Cmcut` — so without that rpath
+  entry, **dyld can't find it and the app crashes at launch on device** (`Library not loaded:
+  @rpath/Cmcut.framework/Cmcut`). Stock Xcode app templates set this; a hand-rolled project (or any
+  consumer with a trimmed runpath) may not. *It does not fail on the macOS host or even the iOS
+  simulator* if a build-dir `PackageFrameworks` path is still searchable — only a clean device load
+  exposes it. Action items: (a) document this requirement for consumers in the README; (b) consider
+  whether the framework's install id / packaging can be made more forgiving. The `SampleApp/` project
+  sets `LD_RUNPATH_SEARCH_PATHS = ($(inherited), @executable_path/Frameworks)` and now loads cleanly.
+
 ## 10. Phased implementation plan
 
-**Phase 0 — Repo bring-up**
-- Init repo, add mcut as submodule pinned to a tag, add `.gitignore`, license files, NOTICE.
+**Phase 0 — Repo bring-up** — ✅ submodule pinned `v1.3.0`, `.gitignore` covers build artifacts,
+plan in place. (License files / NOTICE still TODO before going public — Phase 6.)
 - *Done when:* `git submodule status` shows the pinned tag and license files are present.
 
-**Phase 1 — Build one slice by hand**
-- Get `MCUT_BUILD_AS_SHARED_LIB=ON` building a `libmcut.dylib` for **macOS** first (fastest to iterate), confirm exported symbols with `nm`.
-- *Done when:* a macOS dylib builds and `mcDispatch` is a visible exported symbol.
+**Phase 1 — Build one slice by hand** — ✅ DONE (see §9b Spike 0). macOS dylib builds,
+`mcDispatch` exported.
 
-**Phase 2 — Framework wrapping + xcframework**
-- Wrap the dylib into `Cmcut.framework` (Info.plist, `@rpath` install name, headers, module map). Extend to all slices; lipo simulator arches; `create-xcframework`.
-- *Done when:* `Cmcut.xcframework` is produced and `swift package compute-checksum` succeeds.
+**Phase 2 — Framework wrapping + xcframework** — ✅ DONE (see §9b Spike 1). All three slices
+(iOS device, iOS simulator fat, macOS) wrapped and `Cmcut.xcframework` + checksum produced via
+[scripts/build-xcframework.sh](../../scripts/build-xcframework.sh). Used native CMake (no leetal
+toolchain) and an umbrella header for the `bool`/`stdbool` quirk.
 
-**Phase 3 — Package + minimal Swift wrapper**
-- Write `Package.swift` (local `binaryTarget(path:)` first for fast iteration), a minimal `MCUT` target that does `import Cmcut`, and a "hello cut" test (cube ∩ plane).
+**Phase 3 — Package + minimal Swift wrapper** — 🔄 IN PROGRESS. `Package.swift` (local
+`binaryTarget(path:)`, swift-tools 6.0, iOS 18/macOS 15), `MCUT` target (`import Cmcut`), and a
+context smoke test pass via `swift test` (§9b Spike 2). Remaining: real cube ∩ plane "hello cut"
+(Spike 4) + a SampleApp.
 - *Done when:* `swift test` passes against a local xcframework and the SampleApp runs a real cut.
 
 **Phase 4 — CI release**
