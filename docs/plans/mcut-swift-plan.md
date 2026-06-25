@@ -374,11 +374,27 @@ requirement** vs. real-world meshes.
     mcCreateContext=0` — framework loaded on hardware, no dyld error, C call succeeded. The embedded
     `Cmcut.framework` is auto re-signed with the dev team. **This is where the rpath landmine surfaced**
     (see findings) — the simulator never caught it because it had a stale build-dir search path.
-- **Spike 4 — does it actually cut?** First real `mcDispatch`: hardcoded cube ∩ plane, read back
-  fragments via the two-pass idiom. *Pass:* expected fragment count/geometry.
+- **Spike 4 — does it actually cut? ✅ DONE.** `MCUT.spikeCutCubeWithPlane()` + `testCubePlaneCut`:
+  a real `mcDispatch` cuts a unit cube with a 4×4 plane at y=0 → **2 unsealed FRAGMENT components**
+  (above + below), each fragment's vertex/face counts read back via the two-pass byte-count idiom.
+  Runs on the macOS host via `swift test` (no app needed — see note below). Two real API behaviors
+  pinned down (see findings).
+- **Spike 5 — distribution round-trip.** *(NEXT make-or-break gate — the last unproven leg.)* Every
+  spike so far uses `binaryTarget(path:)` (local file). This proves the `binaryTarget(url:checksum:)`
+  path: push the repo, cut the **first GitHub Release** carrying `Cmcut.xcframework.zip`, flip the
+  manifest to `url:checksum:`, and confirm a build still links + loads. Three stages of realism:
+  (A) local-path consumer ✅ *(SampleApp already did this)*; (B) remote binary, manifest flipped —
+  **requires the push + release**; (C) a brand-new app adding the package by GitHub URL + tag,
+  resolving from nothing. Footguns: checksum chicken-and-egg (upload asset *then* commit checksum),
+  release-asset URL format, zip layout, public-vs-private repo access. ≈ Phase 4 (release automation).
 
-Only after Spike 4 is green do `MCUTMesh`, `MCUTError`, the operation methods, the ModelIO/RealityKit
-bridges, and the RealityView example earn their keep (that work is Phase 5). Spikes 0–3 ≈ Phases 1–2.
+Cutting works (Spike 4). The remaining gate is *distribution* (Spike 5). After both, `MCUTMesh`,
+`MCUTError`, the operation methods, the ModelIO/RealityKit bridges, and the RealityView example earn
+their keep (that work is Phase 5). Spikes 0–3 ≈ Phases 1–2; Spike 4 ≈ early Phase 3; Spike 5 ≈ Phase 4.
+
+> **Note — cutting is testable host-side, no app required.** Because the package targets macOS too,
+> the entire dispatch/readback path runs under `swift test` on the host. Device/simulator runs are only
+> needed for the *load/packaging* gates (Spike 3), not for exercising new cutting functionality.
 
 ### Findings so far (build machinery)
 
@@ -406,6 +422,23 @@ bridges, and the RealityView example earn their keep (that work is Phase 5). Spi
   whether the framework's install id / packaging can be made more forgiving. The `SampleApp/` project
   sets `LD_RUNPATH_SEARCH_PATHS = ($(inherited), @executable_path/Frameworks)` and now loads cleanly.
 
+### Findings so far (cutting / dispatch — from Spike 4)
+
+- **General position must be enforced by default.** A perfectly axis-aligned source vs. axis-aligned
+  cut mesh violates mcut's general-position assumption → `mcDispatch` returns `MC_INVALID_OPERATION`
+  (`-2`) with an "incomplete kernel execution" log. Setting `MC_DISPATCH_ENFORCE_GENERAL_POSITION`
+  (1<<15) makes mcut auto-perturb the cut mesh and succeed. **Design input for Phase 5:** axis-aligned
+  meshes are the *common* case (boxes, planes, primitives), so the Swift wrapper should enable
+  general-position enforcement by default rather than surfacing this as opt-in. (Perturbation amount
+  is tunable via `mcBindState(MC_CONTEXT_GENERAL_POSITION_ENFORCEMENT_CONSTANT/_ATTEMPTS)`.)
+- **`mcGetConnectedComponents` two-pass footgun:** the fetch (second) call must pass `nil` for the
+  `numConnComps` out-param. Reusing the same variable that holds the entry count makes mcut overwrite
+  it to 0 (the header's own example passes `NULL`). The RAII `MCUTContext` layer must hide this.
+- **Fragment count semantics:** with `MC_DISPATCH_FILTER_ALL` a single through-cut yields **6**
+  fragments = 2 locations (above/below) × 3 sealing modes (inside/outside/none), plus patches/seams.
+  To get just the two geometric halves, filter `LOCATION_ABOVE | LOCATION_BELOW | SEALING_NONE`. The
+  high-level ops (`union`/`subtract`/…) will each pick a specific filter-flag combination accordingly.
+
 ## 10. Phased implementation plan
 
 **Phase 0 — Repo bring-up** — ✅ submodule pinned `v1.3.0`, `.gitignore` covers build artifacts,
@@ -420,11 +453,12 @@ plan in place. (License files / NOTICE still TODO before going public — Phase 
 [scripts/build-xcframework.sh](../../scripts/build-xcframework.sh). Used native CMake (no leetal
 toolchain) and an umbrella header for the `bool`/`stdbool` quirk.
 
-**Phase 3 — Package + minimal Swift wrapper** — 🔄 IN PROGRESS. `Package.swift` (local
-`binaryTarget(path:)`, swift-tools 6.0, iOS 18/macOS 15), `MCUT` target (`import Cmcut`), and a
-context smoke test pass via `swift test` (§9b Spike 2). Remaining: real cube ∩ plane "hello cut"
-(Spike 4) + a SampleApp.
-- *Done when:* `swift test` passes against a local xcframework and the SampleApp runs a real cut.
+**Phase 3 — Package + minimal Swift wrapper** — ✅ DONE. `Package.swift` (local
+`binaryTarget(path:)`, swift-tools 6.0, iOS 18/macOS 15), `MCUT` target (`import Cmcut`), context
+smoke test (§9b Spike 2), and a real cube ∩ plane "hello cut" (§9b Spike 4) all pass via `swift
+test`. `SampleApp/` proved on-device load (§9b Spike 3) — and flushed out the rpath landmine.
+- *Done when:* ✅ `swift test` passes against the local xcframework (smoke + cube∩plane) and the
+  SampleApp loads + runs on a real device.
 
 **Phase 4 — CI release**
 - Write `release.yml`: tag → build → upload release asset → bump `Package.swift` to remote `binaryTarget(url:checksum:)`.
