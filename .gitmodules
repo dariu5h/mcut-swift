@@ -1,0 +1,3 @@
+[submodule "external/mcut"]
+	path = external/mcut
+	url = https://github.com/cutdigital/mcut
