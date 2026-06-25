@@ -1,0 +1,71 @@
+name: Update Binary
+
+# Rebuilds Cmcut.xcframework from the *pinned* external/mcut submodule, publishes it
+# as a GitHub Release asset, rewrites Package.swift (url + checksum) to point at it,
+# commits that manifest, and tags the version — all in one run so the three can never
+# disagree.
+#
+# Run this ONLY when you have bumped the mcut submodule (a binary change) and pushed
+# that commit. Swift-only changes do NOT need this — just create a tag; the existing
+# binary asset stays valid.
+#
+# Manual trigger only. Starting it requires WRITE access to the repo, so only you (and
+# any explicit collaborators) can run it — public visibility does not grant that.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g. 0.1.0) — becomes the git tag and the Release that hosts the binary"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: macos-15
+    steps:
+      - name: Checkout (with mcut submodule at its pinned commit)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Build Cmcut.xcframework
+        run: ./scripts/build-xcframework.sh
+
+      - name: Compute checksum
+        id: checksum
+        run: echo "value=$(swift package compute-checksum out/Cmcut.xcframework.zip)" >> "$GITHUB_OUTPUT"
+
+      - name: Point Package.swift at the new binary
+        env:
+          VERSION: ${{ inputs.version }}
+          CHECKSUM: ${{ steps.checksum.outputs.value }}
+        run: |
+          sed -i '' -E \
+            -e "s#releases/download/[^/]+/Cmcut.xcframework.zip#releases/download/${VERSION}/Cmcut.xcframework.zip#" \
+            -e "s#checksum: \"[a-f0-9]+\"#checksum: \"${CHECKSUM}\"#" \
+            Package.swift
+
+      - name: Commit manifest, then tag the version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -am "Update binary to ${VERSION} (rebuilt from mcut submodule)"
+          git tag "${VERSION}"
+          git push origin "HEAD:${{ github.ref_name }}"
+          git push origin "refs/tags/${VERSION}"
+
+      - name: Create the Release and attach the binary
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${VERSION}" out/Cmcut.xcframework.zip \
+            --title "${VERSION}" \
+            --notes "Cmcut.xcframework rebuilt from the pinned mcut submodule."
