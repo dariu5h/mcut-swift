@@ -14,8 +14,8 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "Cmcut",
-            url: "https://github.com/dariu5h/mcut-swift/releases/download/0.0.1/Cmcut.xcframework.zip",
-            checksum: "ab1f01fd63ab82d6c3eadc5829173fd47d9afe5fecbc68845b753f97ff44cf10"
+            url: "https://github.com/dariu5h/mcut-swift/releases/download/0.0.4/Cmcut.xcframework.zip",
+            checksum: "7d0a763b32b8629fc7cc04fd1b50c08f53a1050da4de71c094bcfd4a35c821f1"
         ),
         .target(name: "MCUT", dependencies: ["Cmcut"]),
         .testTarget(name: "MCUTTests", dependencies: ["MCUT"])
