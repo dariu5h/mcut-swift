@@ -39,7 +39,7 @@ out/
 *.dylib
 
 # SampleApp derived data (only if the spike app is kept)
-SampleApp/build/
+SampleApp/*
 
 # Claude
 .claude/*
