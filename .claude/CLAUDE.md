@@ -12,7 +12,7 @@ Full rationale and the phased plan live in `mcut-swift-plan.md` — consult it f
 iOS and macOS. mcut ships as a **prebuilt dynamic `xcframework`**; the Swift layer is compiled by
 consumers.
 
-**Status:** private repo, pre-release. Current phase: _<update this — e.g. "Phase 1: building macOS slice">_.
+**Status:** public repo, pre-release. Current phase: _<update this — e.g. "Phase 1: building macOS slice">_.
 Phases and acceptance criteria are in `mcut-swift-plan.md` §10.
 
 ---
@@ -49,10 +49,9 @@ Package.swift          binaryTarget(Cmcut, dynamic) + target(MCUT) depends on Cm
 Sources/MCUT/          Swifty API (errors as throws, OptionSet flags, MCUTMesh, ops)
 external/mcut/         submodule, pinned tag — DO NOT EDIT
 scripts/
-  build-xcframework.sh build all slices, wrap dylib→framework, lipo, create-xcframework
-  ios.toolchain.cmake  leetal/ios-cmake toolchain
+  build-xcframework.sh build all slices (native CMake iOS support), wrap dylib→framework, lipo, create-xcframework
 .github/workflows/
-  release.yml          tag → build → upload release asset → bump manifest
+  update-binary.yml    manual-trigger: rebuild binary from submodule → upload asset → bump manifest → tag
 ```
 
 ---
@@ -67,7 +66,7 @@ git submodule update --init --recursive
 **Fast dev loop — build the macOS slice only** (quickest to iterate):
 ```bash
 cmake -B build-macos -S external/mcut \
-  -DCMAKE_TOOLCHAIN_FILE=scripts/ios.toolchain.cmake -DPLATFORM=MAC_ARM64 \
+  -DCMAKE_OSX_SYSROOT=macosx -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
   -DMCUT_BUILD_AS_SHARED_LIB=ON -DMCUT_BUILD_TESTS=OFF -DMCUT_BUILD_TUTORIALS=OFF \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build build-macos --config Release
@@ -75,7 +74,7 @@ cmake --build build-macos --config Release
 
 **Verify C symbols are exported** (bring-up sanity check):
 ```bash
-nm -gU build-macos/libmcut.dylib | grep mcDispatch   # must print the symbol
+nm -gU build-macos/bin/libmcut.dylib | grep mcDispatch   # must print the symbol
 ```
 
 **Full xcframework build:**
@@ -89,8 +88,9 @@ swift package compute-checksum out/Cmcut.xcframework.zip
 swift test
 ```
 
-ios-cmake `PLATFORM` values used by the build: `OS64` (iOS device), `SIMULATORARM64` + `SIMULATOR64`
-(simulator, lipo'd into one fat binary), `MAC_ARM64` + `MAC` (macOS).
+Slices the build produces (native CMake, no third-party toolchain): iOS device (`arm64`, sysroot
+`iphoneos`), iOS simulator (`arm64;x86_64` lipo'd into one fat binary, sysroot `iphonesimulator`),
+and macOS (`arm64`, sysroot `macosx`).
 
 ---
 
