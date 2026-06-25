@@ -33,6 +33,15 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      - name: Reject a version that already exists
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/${VERSION}" >/dev/null; then
+            echo "::error::Tag ${VERSION} already exists — pick a new version (this workflow creates the tag for you; don't pre-tag)."
+            exit 1
+          fi
+
       - name: Build Cmcut.xcframework
         run: ./scripts/build-xcframework.sh
 
