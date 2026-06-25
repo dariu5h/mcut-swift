@@ -1,4 +1,5 @@
 import Cmcut
+import simd
 
 /// A reusable mcut working state. Wraps `McContext` with RAII: the handle is created
 /// on `init` and released on `deinit`, and never escapes in a public signature.
@@ -21,18 +22,7 @@ public final class MCUTContext {
     /// connected components (`mcDispatch` + readback).
     public func cut(_ source: MCUTMesh, with cutMesh: MCUTMesh,
                     options: CutOptions = CutOptions()) throws -> CutResult {
-        let flags = MCUTContext.dispatchFlags(options)
-
-        // Flatten positions to contiguous xyzxyz… ; indices/sizes pass straight through.
-        let srcVerts = MCUTContext.flatten(source.positions)
-        let cutVerts = MCUTContext.flatten(cutMesh.positions)
-
-        try MCUTContext.check(mcDispatch(
-            context, flags,
-            srcVerts, source.faceIndices, source.faceSizes,
-            UInt32(source.positions.count), UInt32(source.faceSizes.count),
-            cutVerts, cutMesh.faceIndices, cutMesh.faceSizes,
-            UInt32(cutMesh.positions.count), UInt32(cutMesh.faceSizes.count)))
+        try dispatch(source, with: cutMesh, flags: MCUTContext.dispatchFlags(options))
 
         var fragments = try readComponents(of: MC_CONNECTED_COMPONENT_TYPE_FRAGMENT) {
             try makeFragment($0, options: options)
@@ -53,6 +43,21 @@ public final class MCUTContext {
 
         return CutResult(fragments: fragments, patches: patches, seams: seams,
                          intersectionType: intersectionType)
+    }
+
+    /// Run `mcDispatch` with explicit flags. Flattens positions to contiguous xyzxyz…;
+    /// indices/sizes pass straight through. The boolean ops reuse this with their own
+    /// pinned filter flags.
+    fileprivate func dispatch(_ source: MCUTMesh, with cutMesh: MCUTMesh, flags: McFlags) throws {
+        let srcVerts = MCUTContext.flatten(source.positions)
+        let cutVerts = MCUTContext.flatten(cutMesh.positions)
+
+        try MCUTContext.check(mcDispatch(
+            context, flags,
+            srcVerts, source.faceIndices, source.faceSizes,
+            UInt32(source.positions.count), UInt32(source.faceSizes.count),
+            cutVerts, cutMesh.faceIndices, cutMesh.faceSizes,
+            UInt32(cutMesh.positions.count), UInt32(cutMesh.faceSizes.count)))
     }
 
     /// Read the classification stored by the last dispatch (`MC_CONTEXT_DISPATCH_INTERSECTION_TYPE`).
@@ -248,6 +253,22 @@ public final class MCUTContext {
         return flat
     }
 
+    /// Concatenate several meshes into one, offsetting each mesh's face indices by the
+    /// running vertex count. Used to fold a multi-fragment boolean result into a single mesh.
+    fileprivate static func merge(_ meshes: [MCUTMesh]) -> MCUTMesh {
+        var positions = [SIMD3<Float>]()
+        var faceIndices = [UInt32]()
+        var faceSizes = [UInt32]()
+        var offset: UInt32 = 0
+        for m in meshes {
+            positions.append(contentsOf: m.positions)
+            faceIndices.append(contentsOf: m.faceIndices.map { $0 + offset })
+            faceSizes.append(contentsOf: m.faceSizes)
+            offset += UInt32(m.positions.count)
+        }
+        return MCUTMesh(positions: positions, faceIndices: faceIndices, faceSizes: faceSizes)
+    }
+
     /// Map a non-success `McResult` to a thrown `MCUTError`.
     private static func check(_ rc: McResult) throws {
         switch rc {
@@ -263,4 +284,96 @@ public final class MCUTContext {
 public func cut(_ source: MCUTMesh, with cutMesh: MCUTMesh,
                 options: CutOptions = CutOptions()) throws -> CutResult {
     try MCUTContext().cut(source, with: cutMesh, options: options)
+}
+
+// MARK: - Tier B: boolean / CSG
+
+/// Boolean operations on watertight solids, derived from a single constrained `mcDispatch`.
+///
+/// The filter-flag combinations are taken verbatim from mcut's own `CSGBoolean` tutorial:
+/// each op is one dispatch that selects exactly the sealed fragment representing the result.
+/// `subtract` (a − b), `union` and `intersect` all avoid the one winding-reversal case the
+/// tutorial documents (`LOCATION_BELOW && PATCH_LOCATION_OUTSIDE`, i.e. the unexposed B∖A),
+/// so the returned faces need no reorientation.
+extension MCUTContext {
+    /// `a ∪ b`. Tutorial flags: `SEALING_OUTSIDE | LOCATION_ABOVE`.
+    public func union(_ a: MCUTMesh, _ b: MCUTMesh) throws -> MCUTMesh {
+        try boolean(a, b,
+                    sealing: MC_DISPATCH_FILTER_FRAGMENT_SEALING_OUTSIDE,
+                    location: MC_DISPATCH_FILTER_FRAGMENT_LOCATION_ABOVE)
+    }
+
+    /// `a ∩ b`. Tutorial flags: `SEALING_INSIDE | LOCATION_BELOW`.
+    public func intersect(_ a: MCUTMesh, _ b: MCUTMesh) throws -> MCUTMesh {
+        try boolean(a, b,
+                    sealing: MC_DISPATCH_FILTER_FRAGMENT_SEALING_INSIDE,
+                    location: MC_DISPATCH_FILTER_FRAGMENT_LOCATION_BELOW)
+    }
+
+    /// `a − b` (the part of `a` outside `b`). Tutorial flags: `SEALING_INSIDE | LOCATION_ABOVE`.
+    public func subtract(_ b: MCUTMesh, from a: MCUTMesh) throws -> MCUTMesh {
+        try boolean(a, b,
+                    sealing: MC_DISPATCH_FILTER_FRAGMENT_SEALING_INSIDE,
+                    location: MC_DISPATCH_FILTER_FRAGMENT_LOCATION_ABOVE)
+    }
+
+    /// Cross-section of `mesh` by an infinite plane `normal · x = offset`, synthesized in v1 as
+    /// a bbox-sized quad wound so its normal points along `normal`. Returns the two sealed halves;
+    /// `above` is the `normal`-positive side. Either half is empty if the plane misses the mesh.
+    public func slice(_ mesh: MCUTMesh, byPlane normal: SIMD3<Float>, offset: Float)
+        throws -> (above: MCUTMesh, below: MCUTMesh) {
+        let quad = MCUTContext.planeQuad(covering: mesh, normal: normal, offset: offset)
+
+        var options = CutOptions()
+        options.seal = true
+        let result = try cut(mesh, with: quad, options: options)
+
+        let above = MCUTContext.merge(result.fragments.filter { $0.location == .above }.map(\.mesh))
+        let below = MCUTContext.merge(result.fragments.filter { $0.location == .below }.map(\.mesh))
+        return (above, below)
+    }
+
+    /// One constrained dispatch → keep the sealed (`.complete`) fragments → merge into one mesh.
+    /// Requesting a single sealing mode still returns unsealed duplicates, so we drop those.
+    private func boolean(_ a: MCUTMesh, _ b: MCUTMesh,
+                         sealing: McDispatchFlags, location: McDispatchFlags) throws -> MCUTMesh {
+        let flags = McFlags(
+            UInt32(MC_DISPATCH_VERTEX_ARRAY_FLOAT.rawValue) |
+            UInt32(MC_DISPATCH_ENFORCE_GENERAL_POSITION.rawValue) |
+            UInt32(sealing.rawValue) | UInt32(location.rawValue))
+        try dispatch(a, with: b, flags: flags)
+
+        let frags = try readComponents(of: MC_CONNECTED_COMPONENT_TYPE_FRAGMENT) { comp in
+            (mesh: try self.readMesh(comp),
+             sealed: MCUTContext.fragmentSealType(
+                try self.readScalar(comp, MC_CONNECTED_COMPONENT_DATA_FRAGMENT_SEAL_TYPE)) == .complete)
+        }
+        let sealed = frags.filter(\.sealed).map(\.mesh)
+        return MCUTContext.merge(sealed.isEmpty ? frags.map(\.mesh) : sealed)
+    }
+
+    /// Build a quad on the plane `normal · x = offset`, sized to fully span `mesh`'s bounding
+    /// box (so the cut is a clean through-cut) and wound so its face normal points along `normal`.
+    private static func planeQuad(covering mesh: MCUTMesh,
+                                  normal: SIMD3<Float>, offset: Float) -> MCUTMesh {
+        let n = simd_normalize(normal)
+
+        var lo = mesh.positions[0], hi = mesh.positions[0]
+        for p in mesh.positions { lo = simd_min(lo, p); hi = simd_max(hi, p) }
+        let center = (lo + hi) * 0.5
+        let radius = simd_length(hi - lo)                       // full diagonal — generous coverage
+        let c = center - (simd_dot(n, center) - offset) * n     // center projected onto the plane
+
+        // Any reference axis not parallel to n gives an in-plane orthonormal basis (u, v) with u×v = n.
+        let ref: SIMD3<Float> = abs(n.x) < 0.9 ? [1, 0, 0] : [0, 1, 0]
+        let u = simd_normalize(simd_cross(n, ref))
+        let v = simd_cross(n, u)
+
+        return MCUTMesh(triangles: [
+            c - u * radius - v * radius,
+            c + u * radius - v * radius,
+            c + u * radius + v * radius,
+            c - u * radius + v * radius,
+        ], indices: [0, 1, 2,  0, 2, 3])
+    }
 }

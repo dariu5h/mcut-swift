@@ -1,15 +1,16 @@
 import XCTest
+import simd
 @testable import MCUT
 
 final class MCUTTests: XCTestCase {
 
     // MARK: - Fixtures
 
-    /// Unit cube spanning [-1, 1]^3 — 8 verts, 12 outward-wound triangles.
-    private static func cube() -> MCUTMesh {
+    /// Axis-aligned box with the cube's outward winding, spanning [lo, hi].
+    private static func box(min lo: SIMD3<Float>, max hi: SIMD3<Float>) -> MCUTMesh {
         let positions: [SIMD3<Float>] = [
-            [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
-            [-1, -1,  1], [1, -1,  1], [1, 1,  1], [-1, 1,  1],
+            [lo.x, lo.y, lo.z], [hi.x, lo.y, lo.z], [hi.x, hi.y, lo.z], [lo.x, hi.y, lo.z],
+            [lo.x, lo.y, hi.z], [hi.x, lo.y, hi.z], [hi.x, hi.y, hi.z], [lo.x, hi.y, hi.z],
         ]
         let indices: [UInt32] = [
             0, 3, 2,  0, 2, 1,   // -Z
@@ -20,6 +21,37 @@ final class MCUTTests: XCTestCase {
             3, 7, 6,  3, 6, 2,   // +Y
         ]
         return MCUTMesh(triangles: positions, indices: indices)
+    }
+
+    /// Unit cube spanning [-1, 1]^3 — 8 verts, 12 outward-wound triangles.
+    private static func cube() -> MCUTMesh {
+        box(min: [-1, -1, -1], max: [1, 1, 1])
+    }
+
+    /// A second cube overlapping `cube()` in one corner octant, deliberately offset by
+    /// non-integer amounts in y/z so no face is coplanar with `cube()`'s (which would be a
+    /// hard general-position violation). Spans x[0,2] y[-0.3,1.7] z[-0.7,1.3]; volume 8.
+    /// Overlap with the unit cube is the box x[0,1] y[-0.3,1] z[-0.7,1] → volume 1·1.3·1.7 = 2.21.
+    private static func cubeB() -> MCUTMesh {
+        box(min: [0, -0.3, -0.7], max: [2, 1.7, 1.3])
+    }
+
+    /// Signed volume of a (closed) mesh via the divergence theorem, fan-triangulating each
+    /// face from its first vertex. Positive for outward-facing winding.
+    private static func signedVolume(_ mesh: MCUTMesh) -> Float {
+        var vol: Float = 0
+        var cursor = 0
+        for size in mesh.faceSizes {
+            let n = Int(size)
+            let p0 = mesh.positions[Int(mesh.faceIndices[cursor])]
+            for k in 1..<(n - 1) {
+                let p1 = mesh.positions[Int(mesh.faceIndices[cursor + k])]
+                let p2 = mesh.positions[Int(mesh.faceIndices[cursor + k + 1])]
+                vol += simd_dot(p0, simd_cross(p1, p2))
+            }
+            cursor += n
+        }
+        return vol / 6
     }
 
     /// Horizontal plane quad at y, spanning [-extent, extent] in X/Z.
@@ -176,5 +208,67 @@ final class MCUTTests: XCTestCase {
         XCTAssertTrue(vmap.contains(.max), "cut-seam vertices map to MC_UNDEFINED_VALUE")
         // Every face maps to a real input face (never undefined).
         XCTAssertFalse(fmap.contains(.max), "every output face maps to an input face")
+    }
+
+    // MARK: - Tier B: boolean / CSG
+
+    // Known volumes for the two overlapping-cube fixtures.
+    private static let volA: Float = 8
+    private static let volB: Float = 8
+    private static let volOverlap: Float = 1 * 1.3 * 1.7   // 2.21
+
+    /// `union` is watertight and encloses A + B − overlap.
+    func testUnionVolumeAndWatertight() throws {
+        let result = try MCUTContext().union(Self.cube(), Self.cubeB())
+
+        XCTAssertTrue(Self.isWatertight(result), "union should be watertight")
+        let v = Self.signedVolume(result)
+        XCTAssertGreaterThan(v, 0, "union faces should be outward-wound")
+        XCTAssertEqual(v, Self.volA + Self.volB - Self.volOverlap, accuracy: 0.05)
+    }
+
+    /// `intersect` encloses just the overlap box.
+    func testIntersectVolumeAndWatertight() throws {
+        let result = try MCUTContext().intersect(Self.cube(), Self.cubeB())
+
+        XCTAssertTrue(Self.isWatertight(result), "intersection should be watertight")
+        let v = Self.signedVolume(result)
+        XCTAssertGreaterThan(v, 0, "intersection faces should be outward-wound")
+        XCTAssertEqual(v, Self.volOverlap, accuracy: 0.05)
+    }
+
+    /// `subtract` (A − B) encloses A minus the overlap.
+    func testSubtractVolumeAndWatertight() throws {
+        let result = try MCUTContext().subtract(Self.cubeB(), from: Self.cube())
+
+        XCTAssertTrue(Self.isWatertight(result), "difference should be watertight")
+        let v = Self.signedVolume(result)
+        XCTAssertGreaterThan(v, 0, "difference faces should be outward-wound")
+        XCTAssertEqual(v, Self.volA - Self.volOverlap, accuracy: 0.05)
+    }
+
+    /// The transient free functions and a reusable context agree.
+    func testBooleanReusableContext() throws {
+        let context = try MCUTContext()
+        let u = try context.union(Self.cube(), Self.cubeB())
+        let i = try context.intersect(Self.cube(), Self.cubeB())
+        // A reused context handles successive dispatches without leaking state across them.
+        XCTAssertGreaterThan(Self.signedVolume(u), Self.signedVolume(i))
+    }
+
+    /// `slice` splits the cube into two sealed halves of equal volume on the `normal`-positive
+    /// (`above`) and negative (`below`) sides of the plane.
+    func testSliceCubeIntoHalves() throws {
+        let (above, below) = try MCUTContext().slice(Self.cube(), byPlane: [0, 1, 0], offset: 0)
+
+        XCTAssertTrue(Self.isWatertight(above), "upper half should be watertight")
+        XCTAssertTrue(Self.isWatertight(below), "lower half should be watertight")
+
+        XCTAssertEqual(Self.signedVolume(above), 4, accuracy: 0.05, "upper half is half the cube")
+        XCTAssertEqual(Self.signedVolume(below), 4, accuracy: 0.05, "lower half is half the cube")
+
+        // `above` is the +y side; `below` is the −y side.
+        for p in above.positions { XCTAssertGreaterThanOrEqual(p.y, -0.001) }
+        for p in below.positions { XCTAssertLessThanOrEqual(p.y, 0.001) }
     }
 }

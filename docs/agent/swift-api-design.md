@@ -151,7 +151,7 @@ public enum IntersectionType:  Sendable { case standard, sourceInsideCut, cutIns
    (`TYPE`, `FRAGMENT_LOCATION`, `PATCH_LOCATION`, `FRAGMENT_SEAL_TYPE`, `ORIGIN`) for the metadata.
 6. `mcReleaseConnectedComponents`, then (for the transient convenience) `mcReleaseContext`. Return values.
 
-## Tier B — boolean / CSG (Phase 5b, needs fixtures)
+## Tier B — boolean / CSG (Phase 5b, fixtures passing)
 
 ```swift
 extension MCUTContext {
@@ -164,20 +164,32 @@ extension MCUTContext {
 }
 ```
 
-**Honesty about Tier B.** A boolean result is built from a *combination* of fragments and patches with
-consistent winding, then concatenated into one (ideally watertight) mesh. The conceptual decomposition
-(source A, cut B):
+**How it actually works.** Each boolean is *one* `mcDispatch` with a constrained filter that returns the
+single sealed fragment which *is* the result — mcut's hole-filling does the reassembly, so the wrapper does
+not stitch fragments-plus-patches itself. It only keeps the `.complete` (sealed) fragments (requesting one
+sealing mode still returns unsealed duplicates) and merges them into one mesh.
 
-| Op | Pieces (conceptual) |
-|----|---------------------|
-| `A ∪ B` | part of A **outside** B  +  part of B **outside** A |
-| `A ∩ B` | part of A **inside** B   +  part of B **inside** A |
-| `A − B` | part of A **outside** B  +  part of B **inside** A (reversed winding) |
+**Pinned flags** (verbatim from mcut's `CSGBoolean` tutorial; all also carry
+`MC_DISPATCH_VERTEX_ARRAY_FLOAT | MC_DISPATCH_ENFORCE_GENERAL_POSITION`). Source = first input, cut = second:
 
-The *exact* `MC_DISPATCH_FILTER_*` bit combinations, the sealing mode, and the winding handling
-(`MC_CONTEXT_CONNECTED_COMPONENT_FACE_WINDING_ORDER` via `mcBindState`) are **not pinned down here on
-purpose** — they must be fixed against known-answer fixtures and cross-checked with mcut's own `CSGBoolean`
-tutorial during Phase 5b. Do not ship a guessed flag combo as "union" without a passing fixture test.
+| Op | `MC_DISPATCH_FILTER_*` bits |
+|----|-----------------------------|
+| `union(a, b)`        — `a ∪ b` | `FRAGMENT_SEALING_OUTSIDE \| FRAGMENT_LOCATION_ABOVE` |
+| `intersect(a, b)`    — `a ∩ b` | `FRAGMENT_SEALING_INSIDE  \| FRAGMENT_LOCATION_BELOW` |
+| `subtract(b, from: a)` — `a − b` | `FRAGMENT_SEALING_INSIDE  \| FRAGMENT_LOCATION_ABOVE` |
+
+**Winding.** No reorientation is needed. The tutorial reverses faces only in the
+`FRAGMENT_LOCATION_BELOW && PATCH_LOCATION_OUTSIDE` case, which is `B − A` — an op this API does not expose.
+All three exposed ops avoid that combination, and known-answer tests confirm outward winding (positive
+signed volume) directly, so `mcBindState` / `MC_CONTEXT_CONNECTED_COMPONENT_FACE_WINDING_ORDER` is not used.
+
+**`slice`** is not a dispatch-flag boolean: it synthesizes a bbox-sized quad on the plane (wound so its
+normal points along `normal`), runs a sealed through-cut via the Tier-A `cut`, and partitions the resulting
+fragments by `FragmentLocation` into `above` (the `normal`-positive side) and `below`.
+
+**Verified by fixture.** Two overlapping unit cubes (offset by non-integer amounts to avoid coplanar
+faces) give known signed volumes — union 13.79, intersect 2.21, A−B 5.79 — and a y=0 plane slice yields two
+watertight halves of volume 4. See `Tests/MCUTTests/MCUTTests.swift`.
 
 ## Deliberately deferred
 
