@@ -23,7 +23,7 @@ build_dylib() {  # builddir sysroot "archs" deploy system_name
   local builddir=$1 sysroot=$2 archs=$3 deploy=$4 sysname=${5:-}
   local extra=()
   [ -n "$sysname" ] && extra+=("-DCMAKE_SYSTEM_NAME=$sysname")
-  cmake -B "$builddir" -S external/mcut "${extra[@]}" \
+  cmake -B "$builddir" -S external/mcut ${extra[@]+"${extra[@]}"} \
     -DCMAKE_OSX_SYSROOT="$sysroot" \
     -DCMAKE_OSX_ARCHITECTURES="$archs" \
     -DCMAKE_OSX_DEPLOYMENT_TARGET="$deploy" \
