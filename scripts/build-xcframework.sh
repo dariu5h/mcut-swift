@@ -5,10 +5,10 @@
 # Uses native CMake iOS support (CMAKE_SYSTEM_NAME=iOS) — no third-party toolchain.
 # Deployment targets: iOS 18, macOS 15 (see docs/plans/mcut-swift-plan.md §9).
 #
-# Known upstream-header quirk handled here without modifying external/mcut:
-#   mcut.h #includes "platform.h" (bundled) and uses `bool` without <stdbool.h>
-#   (it's only ever compiled as C++ upstream). We add an umbrella header Cmcut.h
-#   that includes <stdbool.h> before mcut.h and point the module map at it.
+# Known upstream-header quirks handled here without modifying external/mcut
+# (see add_headers): mcut.h uses `bool` without <stdbool.h>, and platform.h
+# #includes the C stdlib headers inside its `extern "C"` block (which breaks
+# Swift/C++ interop / objcxx consumers). Both are fixed in the copied headers.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -33,8 +33,31 @@ build_dylib() {  # builddir sysroot "archs" deploy system_name
 }
 
 add_headers() {  # headers_dir
-  cp external/mcut/include/mcut/mcut.h external/mcut/include/mcut/platform.h "$1/"
-  printf '#include <stdbool.h>\n#include "mcut.h"\n' > "$1/Cmcut.h"
+  cp external/mcut/include/mcut/mcut.h "$1/"
+  # Header hygiene for Swift/C++ interop (objcxx) consumers: upstream platform.h
+  # #includes <stddef.h>/<stdint.h> *inside* its `extern "C"` block. Under objcxx
+  # the Clang importer rewrites those to C++ std module imports, which are illegal
+  # inside a linkage spec — the Cmcut module then fails to build. We can't edit the
+  # pinned submodule, so patch the *copied* header: hoist the system includes above
+  # `extern "C"` (they only define types, so this is a no-op for C consumers).
+  awk '
+    { lines[NR]=$0; n=NR }
+    /#include <stddef\.h>/ { bs=NR }
+    /!defined\(MC_NO_STDINT_H\)/ && /#endif/ { be=NR }
+    /#define MC_PLATFORM_H_/ { gp=NR }
+    END {
+      for (i=1;i<=n;i++) {
+        if (i>=bs && i<=be) continue
+        print lines[i]
+        if (i==gp) { print ""; for (j=bs;j<=be;j++) print lines[j] }
+      }
+    }
+  ' external/mcut/include/mcut/platform.h > "$1/platform.h"
+  # mcut.h opens its *own* `extern "C"` and only then #includes platform.h, so the
+  # system includes would still land inside a linkage spec via mcut.h. Pull
+  # platform.h in first (its include guard makes mcut.h's later include a no-op),
+  # so the std modules are imported once, outside any `extern "C"`.
+  printf '#include <stdbool.h>\n#include "platform.h"\n#include "mcut.h"\n' > "$1/Cmcut.h"
   printf 'framework module Cmcut { header "Cmcut.h" export * }\n' > "${1%/Headers}/Modules/module.modulemap"
 }
 
