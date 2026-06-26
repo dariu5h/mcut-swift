@@ -295,11 +295,11 @@ mcut is **LGPL v3** ("weak copyleft"). Our obligations as a redistributor and th
 - **Index/size scalar type:** store mesh indices and face sizes as **`UInt32`**, matching mcut's
   `uint32_t`. Do **not** use Swift `UInt` (64-bit) — it forces a narrowing/widening copy of every
   index across the C boundary. Positions are `SIMD3<Float>` (see precision, still open).
-- **Core struct is dependency-free.** `MCUTMesh` depends on nothing but `simd`. ModelIO and
-  RealityKit interop are **additive bridges** in separate files guarded by `#if canImport(...)` +
-  `@available`, not baked into the core type. (May graduate to separate library products
-  `MCUTModelIO` / `MCUTRealityKit` if we want opt-in; single target with conditional extensions for
-  now — simplest.)
+- **Core struct is dependency-free.** `MCUTMesh` depends on nothing but `simd`, and the `MCUT`
+  library pulls in no Apple-graphics frameworks. ModelIO and RealityKit interop are **additive
+  bridges** guarded by `#if canImport(...)` + `@available`, shipped as a **separate opt-in library
+  product `MCUTSwifty`** (target `Sources/MCUTSwifty/`, depends on `MCUT`) — so consumers who don't
+  need the `MDLMesh` / `MeshResource` conversions don't pay for them.
 - **Error model:** one `MCUTError: Error` (likely `LocalizedError`) spanning **both** mcut
   `McResult` codes **and** wrapper-side validation (empty/inconsistent mesh, bridge failures, no
   output). All C calls funnel through one `check(_ r: McResult) throws` helper. Exact case names

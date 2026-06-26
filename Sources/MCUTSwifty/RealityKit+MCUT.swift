@@ -28,7 +28,7 @@ extension MCUTMesh {
             }
         }
 
-        let raw = MCUTMesh(triangles: positions, indices: indices)
+        let raw = MCUTMesh(vertices: positions, indices: indices)
         self = weldTolerance.map { raw.welded(tolerance: $0) } ?? raw
     }
 

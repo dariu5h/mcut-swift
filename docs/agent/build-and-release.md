@@ -15,6 +15,7 @@ The submodule, scripts, and workflow are build-time machinery — consumers neve
 ```
 Package.swift          binaryTarget(Cmcut, dynamic) + target(MCUT) depends on Cmcut
 Sources/MCUT/          Swifty API (errors as throws, OptionSet flags, MCUTMesh, ops)
+Sources/MCUTSwifty/    opt-in ModelIO/RealityKit interop product (depends on MCUT)
 external/mcut/         submodule, pinned tag — DO NOT EDIT
 scripts/
   build-xcframework.sh build all slices (native CMake iOS support), wrap dylib→framework, create-xcframework

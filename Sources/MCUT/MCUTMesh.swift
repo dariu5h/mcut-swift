@@ -13,7 +13,7 @@ public struct MCUTMesh: Sendable {
     /// Optional precomputed triangle decomposition of the faces (flat `3·N` indices into
     /// `positions`), as mcut's constrained-Delaunay triangulation. Non-nil on the meshes returned by
     /// `cut`/`union`/`intersect`/`subtract`/`slice`; `nil` on meshes the caller built directly (other
-    /// than the `triangles:` convenience, where the input *is* the triangulation). Correct for
+    /// than the `vertices:` convenience, where the input *is* the triangulation). Correct for
     /// non-convex faces, unlike a naive fan — converters to triangle-only formats use it when present.
     /// Indices are invalidated by anything that renumbers vertices (e.g. `welded()` clears it).
     public var triangleIndices: [UInt32]?
@@ -28,12 +28,26 @@ public struct MCUTMesh: Sendable {
 
     /// Triangle-soup convenience: `faceSizes` becomes `[3, 3, …]`.
     /// `indices.count` must be a multiple of 3. The indices are also the triangulation.
-    public init(triangles positions: [SIMD3<Float>], indices: [UInt32]) {
+    public init(vertices positions: [SIMD3<Float>], indices: [UInt32]) {
         precondition(indices.count % 3 == 0, "triangle index count must be a multiple of 3")
         self.positions = positions
         self.faceIndices = indices
         self.faceSizes = [UInt32](repeating: 3, count: indices.count / 3)
         self.triangleIndices = indices
+    }
+
+    /// `Int`-index convenience for the flat layout; indices are converted to `UInt32`.
+    public init(positions: [SIMD3<Float>], faceIndices: [Int], faceSizes: [Int],
+                triangleIndices: [Int]? = nil) {
+        self.init(positions: positions,
+                  faceIndices: faceIndices.map(UInt32.init),
+                  faceSizes: faceSizes.map(UInt32.init),
+                  triangleIndices: triangleIndices?.map(UInt32.init))
+    }
+
+    /// `Int`-index triangle-soup convenience; indices are converted to `UInt32`.
+    public init(vertices positions: [SIMD3<Float>], indices: [Int]) {
+        self.init(vertices: positions, indices: indices.map(UInt32.init))
     }
 }
 

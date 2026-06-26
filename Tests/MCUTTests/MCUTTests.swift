@@ -20,7 +20,7 @@ final class MCUTTests: XCTestCase {
             0, 1, 5,  0, 5, 4,   // -Y
             3, 7, 6,  3, 6, 2,   // +Y
         ]
-        return MCUTMesh(triangles: positions, indices: indices)
+        return MCUTMesh(vertices: positions, indices: indices)
     }
 
     /// Unit cube spanning [-1, 1]^3 — 8 verts, 12 outward-wound triangles.
@@ -60,7 +60,7 @@ final class MCUTTests: XCTestCase {
             [-extent, y, -extent], [extent, y, -extent],
             [ extent, y,  extent], [-extent, y,  extent],
         ]
-        return MCUTMesh(triangles: positions, indices: [0, 1, 2,  0, 2, 3])
+        return MCUTMesh(vertices: positions, indices: [0, 1, 2,  0, 2, 3])
     }
 
     /// True if every (undirected) edge is shared by exactly two faces — i.e. closed/watertight.
@@ -137,7 +137,7 @@ final class MCUTTests: XCTestCase {
     /// trailing edge lies inside the cube and the cut cannot sever it.
     func testPartialCutYieldsUndefinedFragment() throws {
         let partialPlane = MCUTMesh(
-            triangles: [[-2, 0, -2], [2, 0, -2], [2, 0, 0], [-2, 0, 0]],
+            vertices: [[-2, 0, -2], [2, 0, -2], [2, 0, 0], [-2, 0, 0]],
             indices: [0, 1, 2,  0, 2, 3])
         let result = try cut(Self.cube(), with: partialPlane)
         let hasUndefined = result.fragments.contains { $0.location == .undefined }
@@ -161,7 +161,7 @@ final class MCUTTests: XCTestCase {
     /// `requireThroughCuts` turns a partial cut into a no-op: no fragments come back.
     func testRequireThroughCutsRejectsPartialCut() throws {
         let partialPlane = MCUTMesh(
-            triangles: [[-2, 0, -2], [2, 0, -2], [2, 0, 0], [-2, 0, 0]],
+            vertices: [[-2, 0, -2], [2, 0, -2], [2, 0, 0], [-2, 0, 0]],
             indices: [0, 1, 2,  0, 2, 3])
 
         var options = CutOptions()
@@ -349,7 +349,7 @@ final class MCUTTests: XCTestCase {
     func testWeldClearsTriangulation() {
         // A triangle-soup mesh's triangulation is its own indices; welding renumbers vertices, so it
         // must be dropped rather than left dangling.
-        XCTAssertNotNil(Self.cube().triangleIndices, "triangles: init seeds the triangulation")
+        XCTAssertNotNil(Self.cube().triangleIndices, "vertices: init seeds the triangulation")
         XCTAssertNil(Self.cube().welded().triangleIndices, "welding clears the stale triangulation")
     }
 
@@ -357,7 +357,7 @@ final class MCUTTests: XCTestCase {
         // A triangle with two coincident corners collapses to an edge and is dropped; the second
         // triangle is non-degenerate and survives.
         let mesh = MCUTMesh(
-            triangles: [[0, 0, 0], [1, 0, 0], [0, 0, 0],
+            vertices: [[0, 0, 0], [1, 0, 0], [0, 0, 0],
                         [0, 0, 0], [1, 0, 0], [0, 1, 0]].map { SIMD3<Float>($0[0], $0[1], $0[2]) },
             indices: [0, 1, 2, 3, 4, 5])
         let welded = mesh.welded()

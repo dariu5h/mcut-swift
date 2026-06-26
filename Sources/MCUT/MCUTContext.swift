@@ -129,10 +129,9 @@ public final class MCUTContext {
         for i in stride(from: 0, to: flat.count, by: 3) {
             positions.append(SIMD3<Float>(flat[i], flat[i + 1], flat[i + 2]))
         }
-        return MCUTMesh(
-            positions: positions,
-            faceIndices: try readChannel(comp, MC_CONNECTED_COMPONENT_DATA_FACE),
-            faceSizes: try readChannel(comp, MC_CONNECTED_COMPONENT_DATA_FACE_SIZE))
+        let faceIndices: [UInt32] = try readChannel(comp, MC_CONNECTED_COMPONENT_DATA_FACE)
+        let faceSizes:   [UInt32] = try readChannel(comp, MC_CONNECTED_COMPONENT_DATA_FACE_SIZE)
+        return MCUTMesh(positions: positions, faceIndices: faceIndices, faceSizes: faceSizes)
     }
 
     private func readTriangulation(_ comp: McConnectedComponent) throws -> [UInt32] {
@@ -383,7 +382,7 @@ extension MCUTContext {
         let u = simd_normalize(simd_cross(n, ref))
         let v = simd_cross(n, u)
 
-        return MCUTMesh(triangles: [
+        return MCUTMesh(vertices: [
             c - u * radius - v * radius,
             c + u * radius - v * radius,
             c + u * radius + v * radius,

@@ -152,7 +152,7 @@ extension MCUTMesh {
             for idx in tri { faceIndices.append(UInt32(idx)) }
         }
 
-        let raw = MCUTMesh(triangles: positions, indices: faceIndices)
+        let raw = MCUTMesh(vertices: positions, indices: faceIndices)
         self = weldTolerance.map { raw.welded(tolerance: $0) } ?? raw
     }
 
