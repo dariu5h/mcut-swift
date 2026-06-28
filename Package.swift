@@ -1,10 +1,9 @@
 // swift-tools-version:6.0
 import PackageDescription
 
-// SPIKE 5: release form — binaryTarget(url:checksum:) pointing at the GitHub
-// Release asset. For local iteration, swap back to the path: form (see
-// docs/plans/mcut-swift-plan.md §5). The checksum is the SHA-256 produced by
-// `swift package compute-checksum out/Cmcut.xcframework.zip`.
+// Release form — binaryTarget(url:checksum:) pointing at the GitHub Release asset. For local
+// iteration, swap back to the path: form (`.binaryTarget(name: "Cmcut", path: "out/Cmcut.xcframework")`).
+// The checksum is the SHA-256 produced by `swift package compute-checksum out/Cmcut.xcframework.zip`.
 let package = Package(
     name: "MCUT",
     platforms: [.iOS(.v18), .macOS(.v15)],

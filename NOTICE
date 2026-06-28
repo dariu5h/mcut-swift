@@ -1,0 +1,19 @@
+mcut-swift
+==========
+
+This package wraps and redistributes mcut, a mesh cutting / boolean library by
+CutDigital Enterprise.
+
+  mcut — https://github.com/cutdigital/mcut
+  Copyright (c) CutDigital Enterprise
+  Licensed under the GNU Lesser General Public License, Version 3 (LGPL-3.0).
+
+The mcut binary is distributed here as a prebuilt, dynamically linked
+xcframework (Cmcut.xcframework), produced unmodified from the upstream source
+pinned at tag v1.3.0. The corresponding source is available from the URL above
+at that tag.
+
+As required by the LGPL, the library is shipped as a dynamic, replaceable
+framework. See LICENSE (LGPL-3.0) and COPYING (GPL-3.0, incorporated by the
+LGPL) for the full license texts, and README.md for what this means for your
+app and how to obtain a commercial license for mcut from CutDigital.

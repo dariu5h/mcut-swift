@@ -31,21 +31,15 @@ playground.xcworkspace
 
 .build/
 
-# mcut build artifacts (generated — never commit; see CLAUDE.md constraint #3)
+# mcut build artifacts (generated — never commit)
 build-*/
 out/
 *.xcframework
 *.xcframework.zip
 *.dylib
 
-# SampleApp derived data (only if the spike app is kept)
-SampleApp/*
-
 # Claude
-.claude/*
-!.claude/settings.json
-!.claude/CLAUDE.md
-.claude/settings.local.json
+.claude/
 
 # macOS
 .DS_Store

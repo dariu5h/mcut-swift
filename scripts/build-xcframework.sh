@@ -3,7 +3,7 @@
 #
 # Slices: iOS device (arm64), iOS simulator (arm64+x86_64 fat), macOS (arm64).
 # Uses native CMake iOS support (CMAKE_SYSTEM_NAME=iOS) — no third-party toolchain.
-# Deployment targets: iOS 18, macOS 15 (see docs/plans/mcut-swift-plan.md §9).
+# Deployment targets: iOS 18, macOS 15 (must match Package.swift platforms).
 #
 # Known upstream-header quirks handled here without modifying external/mcut
 # (see add_headers): mcut.h uses `bool` without <stdbool.h>, and platform.h
